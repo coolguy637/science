@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Simple Site Blocker",
+  "version": "1.0",
+  "description": "Block sites using a blocklist you control.",
+  "permissions": [
+    "storage",
+    "declarativeNetRequest"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "Simple Site Blocker"
+  }
+}
