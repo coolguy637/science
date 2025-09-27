@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Simple Site Blocker — Files</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; max-width:900px; margin:32px auto; padding:0 16px; }
+    h1 { font-size: 1.4rem; margin-bottom: 0.2rem; }
+    pre { background:#f6f8fa; padding:12px; border-radius:8px; overflow:auto; }
+    .file { border:1px solid #e3e6ea; padding:12px; border-radius:10px; margin:12px 0; }
+    button { margin-right:8px; padding:8px 12px; border-radius:6px; border:1px solid #bbb; background:#fff; cursor:pointer; }
+    .actions { margin-top:8px; }
+    .note { color:#555; margin-top:12px; }
+    .ok { color:green; }
+    .danger { color:crimson; }
+    footer { margin-top:28px; font-size:0.9rem; color:#555; }
+    a { color: #1a73e8; text-decoration:none; }
+  </style>
+</head>
+<body>
+  <h1>Simple Site Blocker — Extension Files</h1>
+  <p>Use the buttons to download each file. Put them together in a folder (e.g. <code>site-blocker-extension</code>) and then load the folder in <code>chrome://extensions</code> (enable Developer mode → Load unpacked).</p>
+
+  <div id="files"></div>
+
+  <div style="margin-top:18px;">
+    <button id="downloadAll">Download all files as ZIP</button>
+    <span class="note">Tip: if your browser blocks the ZIP download, download the individual files instead.</span>
+  </div>
+
+  <footer>
+    <p><strong>Reminder:</strong> This extension only affects the profile that installs it. It <em>does not</em> remove or disable other users' extensions or bypass admin controls. For help adding features (schedule, PIN, sync) tell me which feature you'd like and I'll add the code.</p>
+  </footer>
+
+<script>
+/* ---------- FILE CONTENTS ---------- */
+const files = {
+  "manifest.json": `{
+  "manifest_version": 3,
+  "name": "Simple Site Blocker",
+  "version": "1.0",
+  "description": "Block sites using a blocklist you control.",
+  "permissions": [
+    "storage",
+    "declarativeNetRequest"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "Simple Site Blocker"
+  }
+}
+`,
+
+  "background.js": `// background.js (service worker)
+const BASE_RULE_ID = 1000; // starting id for our rules
+
+function makeRule(id, pattern) {
+  let urlFilter;
+  // If the pattern looks like a plain domain, convert to wildcard URL filter
+  if (/^[a-z0-9.-]+$/i.test(pattern)) {
+    urlFilter = "*://" + pattern + "/*";
+  } else {
+    urlFilter = pattern;
+  }
+
+  return {
+    id,
+    priority: 1,
+    action: { type: "block" },
+    condition: {
+      urlFilter: urlFilter,
+      resourceTypes: ["main_frame", "sub_frame"]
+    }
+  };
+}
+
+async function setBlocklist(patterns) {
+  try {
+    const existing = await chrome.declarativeNetRequest.getDynamicRules();
+    const toRemove = existing.filter(r => r.id >= BASE_RULE_ID).map(r => r.id);
+
+    const newRules = [];
+    let id = BASE_RULE_ID;
+    for (const p of patterns) {
+      if (!p || !p.trim()) continue;
+      newRules.push(makeRule(id, p.trim()));
+      id++;
+    }
+
+    await chrome.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds: toRemove,
+      addRules: newRules
+    });
+    console.log('Updated rules', newRules);
+  } catch (err) {
+    console.error('Failed to update DNR rules:', err);
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.local.get({ blocklist: [] }, (items) => {
+    setBlocklist(items.blocklist || []);
+  });
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.action === "setBlocklist") {
+    const list = Array.isArray(message.list) ? message.list : [];
+    chrome.storage.local.set({ blocklist: list }, () => {
+      setBlocklist(list);
+      sendResponse({ ok: true });
+    });
+    return true; // indicate async response
+  }
+});
+`,
+
+  "options.html": `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Simple Site Blocker — Options</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <h1>Simple Site Blocker</h1>
+  <p>Enter domains or URL patterns (one per line). Examples:</p>
+  <pre>
+example.com
+*.facebook.com
+*://*.example.edu/*
+  </pre>
+
+  <textarea id="blocklist" rows="12" cols="60" placeholder="one domain or pattern per line"></textarea>
+  <br/>
+  <button id="save">Save blocklist</button>
+  <button id="clear">Clear</button>
+  <p id="status"></p>
+
+  <script src="options.js"></script>
+</body>
+</html>
+`,
+
+  "options.js": `const textarea = document.getElementById("blocklist");
+const saveBtn = document.getElementById("save");
+const clearBtn = document.getElementById("clear");
+const status = document.getElementById("status");
+
+function showStatus(msg, isError = false) {
+  status.textContent = msg;
+  status.style.color = isError ? "crimson" : "green";
+  setTimeout(() => { status.textContent = ""; }, 3000);
+}
+
+chrome.storage.local.get({ blocklist: [] }, (items) => {
+  textarea.value = (items.blocklist || []).join("\\n");
+});
+
+saveBtn.addEventListener("click", () => {
+  const lines = textarea.value.split("\\n").map(l => l.trim()).filter(Boolean);
+  chrome.runtime.sendMessage({ action: "setBlocklist", list: lines }, (resp) => {
+    if (chrome.runtime.lastError) {
+      showStatus("Error saving: " + chrome.runtime.lastError.message, true);
+    } else showStatus("Saved!");
+  });
+});
+
+clearBtn.addEventListener("click", () => {
+  textarea.value = "";
+  chrome.runtime.sendMessage({ action: "setBlocklist", list: [] }, (resp) => {
+    if (chrome.runtime.lastError) {
+      showStatus("Error clearing: " + chrome.runtime.lastError.message, true);
+    } else showStatus("Cleared!");
+  });
+});
+`,
+
+  "styles.css": `body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 20px; }
+textarea { width: 100%; max-width: 700px; font-family: monospace; }
+button { margin-top: 8px; margin-right: 8px; padding: 6px 12px; }`
+};
+
+/* ---------- UI BUILD ---------- */
+const container = document.getElementById('files');
+
+function makeFileBlock(name, content) {
+  const el = document.createElement('div');
+  el.className = 'file';
+  const h = document.createElement('h3');
+  h.textContent = name;
+  const pre = document.createElement('pre');
+  pre.textContent = content;
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const dlBtn = document.createElement('button');
+  dlBtn.textContent = 'Download';
+  dlBtn.addEventListener('click', () => downloadFile(name, content));
+  const viewBtn = document.createElement('button');
+  viewBtn.textContent = 'View raw';
+  viewBtn.addEventListener('click', () => openRaw(name, content));
+  actions.appendChild(dlBtn);
+  actions.appendChild(viewBtn);
+  el.appendChild(h);
+  el.appendChild(pre);
+  el.appendChild(actions);
+  return el;
+}
+
+function downloadFile(filename, text) {
+  const blob = new Blob([text], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function openRaw(name, text) {
+  const w = window.open('', '_blank');
+  w.document.write('<pre style="white-space:pre-wrap;font-family:monospace;padding:16px;">' + escapeHtml(text) + '</pre>');
+  w.document.title = name;
+  w.document.close();
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+for (const [name, content] of Object.entries(files)) {
+  container.appendChild(makeFileBlock(name, content));
+}
+
+/* ---------- ZIP: create simple zip in-browser using JSZip if available; otherwise create a folder-like single download of a .txt list ---------- */
+document.getElementById('downloadAll').addEventListener('click', async () => {
+  // try to use JSZip from CDN; fallback to downloading each file separately
+  try {
+    const JSZipUrl = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+    if (!window.JSZip) {
+      await loadScript(JSZipUrl);
+    }
+    if (!window.JSZip) throw new Error('JSZip failed to load');
+    const zip = new JSZip();
+    for (const [name, content] of Object.entries(files)) {
+      zip.file(name, content);
+    }
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'site-blocker-extension.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    // fallback: download files individually
+    for (const [name, content] of Object.entries(files)) {
+      downloadFile(name, content);
+      await wait(120); // tiny pause so browser isn't overwhelmed
+    }
+    alert('If the ZIP failed, individual files were downloaded instead. Put them together in a folder and load unpacked in chrome://extensions.');
+  }
+});
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => res();
+    s.onerror = () => rej(new Error('failed to load ' + src));
+    document.head.appendChild(s);
+  });
+}
+function wait(ms){ return new Promise(r=>setTimeout(r, ms)); }
+</script>
+</body>
+</html>
